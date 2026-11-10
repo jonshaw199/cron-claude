@@ -38,7 +38,11 @@ WORKING_DIR="$HOME/code/myproject"
 ADD_DIRS=("$HOME/notes")
 ALLOWED_TOOLS="Read Grep Glob"       # read-only by default; opt into writes
 NOTIFY=1
+GIT_OUTCOME=0                        # 1 = report the git HEAD-diff (for committing jobs)
 ```
+
+For a job that commits to `WORKING_DIR`, set `GIT_OUTCOME=1` and the status line reports
+exactly which files landed (derived from git), rather than trusting the agent's summary.
 
 Real job files are gitignored (they name your paths/tasks) — only
 `jobs/example.job.sh` is committed.

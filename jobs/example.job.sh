@@ -21,3 +21,7 @@ ADD_DIRS=(
 ALLOWED_TOOLS="Read Grep Glob"
 
 NOTIFY=1                            # desktop notification after each run
+
+# For jobs that commit in WORKING_DIR: derive the outcome from the git HEAD diff
+# (what actually landed) instead of the agent's self-reported last line.
+GIT_OUTCOME=0

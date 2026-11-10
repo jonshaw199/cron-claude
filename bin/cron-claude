@@ -48,6 +48,7 @@ load_job() { # path — sources the job and applies defaults
   : "${ALLOWED_TOOLS:=Read Grep Glob}"   # read-only by default; jobs opt into writes
   : "${WORKING_DIR:=$HOME}"
   : "${NOTIFY:=1}"
+  : "${GIT_OUTCOME:=0}"   # 1 = derive the outcome from the working dir's git HEAD diff
   JOB_STATE="$STATE_DIR/$JOB_NAME"
   LABEL="com.$(id -un).cron-claude.$JOB_NAME"
   PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
@@ -60,7 +61,13 @@ do_run() {
 
   local prompt
   if [ -n "${PROMPT_FILE:-}" ]; then prompt="$(cat "$PROMPT_FILE")"; else prompt="${PROMPT:?job must set PROMPT or PROMPT_FILE}"; fi
+  local ctx="## Context (this run)
+Working directory: $WORKING_DIR"
+  for d in ${ADD_DIRS[@]+"${ADD_DIRS[@]}"}; do [ -n "$d" ] && ctx="$ctx
+Readable dir: $d"; done
   prompt="$prompt
+
+$ctx
 
 End your reply with a single-line summary of the outcome (the dashboard shows that line)."
   [ "${DRY_RUN:-0}" = "1" ] && prompt="$prompt
@@ -68,6 +75,10 @@ This is a DRY RUN — make no irreversible changes; report only what you WOULD d
 
   local add=(--add-dir "$JOB_STATE")
   for d in ${ADD_DIRS[@]+"${ADD_DIRS[@]}"}; do [ -n "$d" ] && add+=(--add-dir "$d"); done
+
+  # For git-aware jobs, snapshot HEAD so the outcome reflects what actually landed.
+  local before=""
+  [ "$GIT_OUTCOME" = "1" ] && before="$(git -C "$WORKING_DIR" rev-parse HEAD 2>/dev/null || true)"
 
   echo "===== $(date) run $JOB_NAME (dry=${DRY_RUN:-0}) =====" >> "$log"
   # Capture the agent's stdout so its last line becomes the outcome (works even for
@@ -77,9 +88,24 @@ This is a DRY RUN — make no irreversible changes; report only what you WOULD d
     || echo "(agent exited non-zero)" >> "$log"
   cat "$resp" >> "$log"
 
-  local outcome; outcome="$(grep -v '^[[:space:]]*$' "$resp" 2>/dev/null | tail -1)"; : "${outcome:=ran}"
-  printf '{\n  "job": "%s",\n  "last_run": "%s",\n  "dry_run": %s,\n  "outcome": "%s"\n}\n' \
+  # Outcome: git HEAD-diff when the job is git-aware (trustworthy for committing jobs),
+  # otherwise the agent's own final line.
+  local outcome changed=""
+  if [ "$GIT_OUTCOME" = "1" ] && [ -n "$before" ]; then
+    local after; after="$(git -C "$WORKING_DIR" rev-parse HEAD 2>/dev/null || true)"
+    if [ -n "$after" ] && [ "$before" != "$after" ]; then
+      changed="$(git -C "$WORKING_DIR" diff --name-only "$before" "$after" | paste -sd, -)"
+      outcome="committed $(git -C "$WORKING_DIR" diff --name-only "$before" "$after" | grep -c .) file(s): $changed"
+    else
+      outcome="no changes committed"
+    fi
+  else
+    outcome="$(grep -v '^[[:space:]]*$' "$resp" 2>/dev/null | tail -1)"; : "${outcome:=ran}"
+  fi
+
+  printf '{\n  "job": "%s",\n  "last_run": "%s",\n  "dry_run": %s,\n  "changed_files": "%s",\n  "outcome": "%s"\n}\n' \
     "$JOB_NAME" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "${DRY_RUN:-0}" \
+    "$(printf '%s' "$changed" | sed 's/"/\\"/g')" \
     "$(printf '%s' "$outcome" | sed 's/"/\\"/g')" > "$status"
   echo "===== $(date) done: $outcome =====" >> "$log"
   notify "cron-claude: $JOB_NAME" "$outcome"
