@@ -1,0 +1,8 @@
+# Your real jobs are private (they name your paths/tasks) — keep them local.
+jobs/*.job.sh
+!jobs/example.job.sh
+
+# Runtime state / logs.
+.local/
+*.log
+.DS_Store

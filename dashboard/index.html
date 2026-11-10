@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>cron-claude</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; max-width: 680px; margin: 8vh auto; padding: 0 1rem; color: #222; }
+  h1 { font-size: 1.1rem; color: #666; font-weight: 600; }
+  .job { border: 1px solid #e3e3e3; border-radius: 10px; padding: 1rem 1.25rem; margin: .75rem 0; }
+  .name { font-weight: 700; }
+  .outcome { margin-top: .35rem; }
+  .when { color: #999; font-size: .8rem; margin-top: .35rem; }
+  .dry { color: #b26a00; font-size: .75rem; margin-left: .5rem; }
+  .muted { color: #999; font-size: .8rem; margin-top: 1rem; }
+</style>
+<h1>cron-claude</h1>
+<div id="jobs"><div class="muted">loading…</div></div>
+<p class="muted">Refreshes every 30s.</p>
+<script>
+async function j(u){ return (await fetch(u + '?' + Date.now())).json(); }
+async function load() {
+  try {
+    const names = await j('jobs.json');
+    if (!names.length) { document.getElementById('jobs').innerHTML = '<div class="muted">no jobs have run yet</div>'; return; }
+    const cards = await Promise.all(names.map(async n => {
+      try { const s = await j(n + '/status.json');
+        return `<div class="job"><div class="name">${s.job}${s.dry_run==1?'<span class="dry">dry</span>':''}</div>
+          <div class="outcome">${s.outcome || '—'}</div><div class="when">${s.last_run || ''}</div></div>`;
+      } catch { return `<div class="job"><div class="name">${n}</div><div class="muted">no status</div></div>`; }
+    }));
+    document.getElementById('jobs').innerHTML = cards.join('');
+  } catch { document.getElementById('jobs').innerHTML = '<div class="muted">no status yet</div>'; }
+}
+load(); setInterval(load, 30000);
+</script>

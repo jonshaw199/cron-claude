@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# cron-claude — run headless Claude agents as scheduled launchd jobs.
+# A "job" is a tiny config file (schedule + prompt + allowed dirs/tools). This one
+# scaffold runs any job, captures a status line, sends a desktop notification, and
+# serves a dashboard. Add a new scheduled agent by dropping a jobs/<name>.job.sh.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+JOBS_DIR="${CRON_CLAUDE_JOBS:-$ROOT/jobs}"
+STATE_DIR="${CRON_CLAUDE_STATE:-$HOME/.local/state/cron-claude}"
+
+usage() { cat <<EOF
+cron-claude — scheduled headless Claude jobs
+
+  list                 list available jobs
+  run <job>            run a job now (prefix DRY_RUN=1 to preview)
+  install <job>        schedule it via launchd
+  uninstall <job>      remove its launchd job
+  status [job]         show last-run status (all jobs, or one)
+  dashboard            serve the status dashboard at :4321
+
+Jobs live in $JOBS_DIR (*.job.sh). See jobs/example.job.sh.
+EOF
+}
+
+job_path() {
+  local n="$1"
+  for p in "$JOBS_DIR/$n.job.sh" "$JOBS_DIR/$n" "$n"; do
+    [ -f "$p" ] && { echo "$p"; return; }
+  done
+  echo "cron-claude: no such job '$n'" >&2; exit 1
+}
+
+notify() { # title, message
+  [ "${NOTIFY:-1}" = "1" ] || return 0
+  if command -v terminal-notifier >/dev/null 2>&1; then
+    terminal-notifier -title "$1" -message "$2" >/dev/null 2>&1 || true
+  else
+    osascript -e "display notification \"$2\" with title \"$1\"" >/dev/null 2>&1 || true
+  fi
+}
+
+load_job() { # path — sources the job and applies defaults
+  # shellcheck disable=SC1090
+  . "$1"
+  : "${JOB_NAME:=$(basename "$1" .job.sh)}"
+  : "${SCHEDULE_HOUR:=9}"; : "${SCHEDULE_MINUTE:=0}"
+  : "${ALLOWED_TOOLS:=Read Grep Glob}"   # read-only by default; jobs opt into writes
+  : "${WORKING_DIR:=$HOME}"
+  : "${NOTIFY:=1}"
+  JOB_STATE="$STATE_DIR/$JOB_NAME"
+  LABEL="com.$(id -un).cron-claude.$JOB_NAME"
+  PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+}
+
+do_run() {
+  load_job "$1"
+  mkdir -p "$JOB_STATE"
+  local log="$JOB_STATE/run.log" status="$JOB_STATE/status.json" resp="$JOB_STATE/response.txt"
+
+  local prompt
+  if [ -n "${PROMPT_FILE:-}" ]; then prompt="$(cat "$PROMPT_FILE")"; else prompt="${PROMPT:?job must set PROMPT or PROMPT_FILE}"; fi
+  prompt="$prompt
+
+End your reply with a single-line summary of the outcome (the dashboard shows that line)."
+  [ "${DRY_RUN:-0}" = "1" ] && prompt="$prompt
+This is a DRY RUN — make no irreversible changes; report only what you WOULD do."
+
+  local add=(--add-dir "$JOB_STATE")
+  for d in ${ADD_DIRS[@]+"${ADD_DIRS[@]}"}; do [ -n "$d" ] && add+=(--add-dir "$d"); done
+
+  echo "===== $(date) run $JOB_NAME (dry=${DRY_RUN:-0}) =====" >> "$log"
+  # Capture the agent's stdout so its last line becomes the outcome (works even for
+  # read-only jobs, which can't write a note file).
+  # shellcheck disable=SC2086
+  ( cd "$WORKING_DIR" && claude -p "$prompt" "${add[@]}" --allowedTools $ALLOWED_TOOLS ) > "$resp" 2>>"$log" \
+    || echo "(agent exited non-zero)" >> "$log"
+  cat "$resp" >> "$log"
+
+  local outcome; outcome="$(grep -v '^[[:space:]]*$' "$resp" 2>/dev/null | tail -1)"; : "${outcome:=ran}"
+  printf '{\n  "job": "%s",\n  "last_run": "%s",\n  "dry_run": %s,\n  "outcome": "%s"\n}\n' \
+    "$JOB_NAME" "$(date '+%Y-%m-%d %H:%M:%S %Z')" "${DRY_RUN:-0}" \
+    "$(printf '%s' "$outcome" | sed 's/"/\\"/g')" > "$status"
+  echo "===== $(date) done: $outcome =====" >> "$log"
+  notify "cron-claude: $JOB_NAME" "$outcome"
+}
+
+do_install() {
+  load_job "$1"
+  mkdir -p "$(dirname "$PLIST")" "$JOB_STATE"
+  sed -e "s#@LABEL@#$LABEL#g" -e "s#@BIN@#$ROOT/bin/cron-claude#g" -e "s#@JOB@#$JOB_NAME#g" \
+      -e "s#@HOUR@#$SCHEDULE_HOUR#g" -e "s#@MINUTE@#$SCHEDULE_MINUTE#g" -e "s#@LOG@#$JOB_STATE/run.log#g" \
+      "$ROOT/bin/launchd.plist.template" > "$PLIST"
+  launchctl unload "$PLIST" 2>/dev/null || true
+  launchctl load -w "$PLIST"
+  echo "Installed $LABEL — daily at $(printf '%02d:%02d' "$SCHEDULE_HOUR" "$SCHEDULE_MINUTE")."
+}
+
+do_uninstall() {
+  load_job "$1"
+  launchctl unload "$PLIST" 2>/dev/null || true
+  rm -f "$PLIST"
+  echo "Removed $LABEL."
+}
+
+do_status() {
+  local jobs
+  if [ -n "${1:-}" ]; then jobs="$STATE_DIR/$1/status.json"; else jobs="$STATE_DIR"/*/status.json; fi
+  local found=0
+  for s in $jobs; do
+    [ -f "$s" ] || continue; found=1
+    if command -v jq >/dev/null 2>&1; then
+      jq -r '"[\(.job)] \(.last_run) — \(.outcome)"' "$s"
+    else cat "$s"; fi
+  done
+  [ "$found" = 1 ] || echo "no runs yet."
+}
+
+cmd="${1:-}"; shift || true
+case "$cmd" in
+  list)      ls "$JOBS_DIR"/*.job.sh 2>/dev/null | xargs -n1 basename 2>/dev/null | sed 's/\.job\.sh$//' || echo "(no jobs)";;
+  run)       do_run "$(job_path "${1:?usage: run <job>}")";;
+  install)   do_install "$(job_path "${1:?usage: install <job>}")";;
+  uninstall) do_uninstall "$(job_path "${1:?usage: uninstall <job>}")";;
+  status)    do_status "${1:-}";;
+  dashboard) exec "$ROOT/bin/dashboard.sh";;
+  ""|-h|--help) usage;;
+  *) usage; exit 1;;
+esac
