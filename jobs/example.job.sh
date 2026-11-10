@@ -17,7 +17,8 @@ ADD_DIRS=(
 )
 
 # Tools the agent may use. Default is read-only (Read Grep Glob). Opt into writes
-# explicitly, e.g. ALLOWED_TOOLS="Read Edit Write Grep Glob 'Bash(git:*)'".
+# explicitly, e.g. ALLOWED_TOOLS="Read Edit Write Grep Glob Bash". Use whole tool
+# names here — fine-grained Bash(git:*) patterns aren't accepted via --allowedTools.
 ALLOWED_TOOLS="Read Grep Glob"
 
 NOTIFY=1                            # desktop notification after each run

@@ -50,7 +50,8 @@ Real job files are gitignored (they name your paths/tasks) — only
 ## Safety
 
 - Jobs are **read-only by default** (`Read Grep Glob`). A job must explicitly opt into
-  `Edit`/`Write`/`Bash(...)`.
+  `Edit`/`Write`/`Bash`. Use whole tool names — fine-grained `Bash(git:*)` patterns
+  aren't accepted via `--allowedTools`.
 - A job that pushes to a remote or mutates data is an **armed autonomous action**: your
   agent harness may require you to approve installing/running it. That gate is a feature.
 - Prefer `DRY_RUN=1` first; keep the agent's reach scoped with `WORKING_DIR` + `ADD_DIRS`.
