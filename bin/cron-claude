@@ -45,6 +45,9 @@ load_job() { # path — sources the job and applies defaults
   . "$1"
   : "${JOB_NAME:=$(basename "$1" .job.sh)}"
   : "${SCHEDULE_HOUR:=9}"; : "${SCHEDULE_MINUTE:=0}"
+  # SCHEDULE_HOURS (space-separated) runs the job several times a day; it overrides
+  # SCHEDULE_HOUR when set. e.g. SCHEDULE_HOURS="9 13 17", or "0..23" style lists.
+  : "${SCHEDULE_HOURS:=$SCHEDULE_HOUR}"
   : "${ALLOWED_TOOLS:=Read Grep Glob}"   # read-only by default; jobs opt into writes
   : "${WORKING_DIR:=$HOME}"
   : "${NOTIFY:=1}"
@@ -114,12 +117,28 @@ This is a DRY RUN — make no irreversible changes; report only what you WOULD d
 do_install() {
   load_job "$1"
   mkdir -p "$(dirname "$PLIST")" "$JOB_STATE"
+  # Build the StartCalendarInterval value: one <dict> per hour in SCHEDULE_HOURS.
+  local cal
+  set -- $SCHEDULE_HOURS
+  if [ "$#" -gt 1 ]; then
+    cal="  <array>"
+    for h in "$@"; do cal="$cal
+    <dict><key>Hour</key><integer>$h</integer><key>Minute</key><integer>$SCHEDULE_MINUTE</integer></dict>"; done
+    cal="$cal
+  </array>"
+  else
+    cal="  <dict><key>Hour</key><integer>$1</integer><key>Minute</key><integer>$SCHEDULE_MINUTE</integer></dict>"
+  fi
+  # Substitute the scalar placeholders, then inject the (possibly multi-line) calendar
+  # block where @CALENDAR@ sits — a plain read loop handles the newlines cleanly.
   sed -e "s#@LABEL@#$LABEL#g" -e "s#@BIN@#$ROOT/bin/cron-claude#g" -e "s#@JOB@#$JOB_NAME#g" \
-      -e "s#@HOUR@#$SCHEDULE_HOUR#g" -e "s#@MINUTE@#$SCHEDULE_MINUTE#g" -e "s#@LOG@#$JOB_STATE/run.log#g" \
-      "$ROOT/bin/launchd.plist.template" > "$PLIST"
+      -e "s#@LOG@#$JOB_STATE/run.log#g" "$ROOT/bin/launchd.plist.template" \
+  | while IFS= read -r line; do
+      if [ "$line" = "@CALENDAR@" ]; then printf '%s\n' "$cal"; else printf '%s\n' "$line"; fi
+    done > "$PLIST"
   launchctl unload "$PLIST" 2>/dev/null || true
   launchctl load -w "$PLIST"
-  echo "Installed $LABEL — daily at $(printf '%02d:%02d' "$SCHEDULE_HOUR" "$SCHEDULE_MINUTE")."
+  echo "Installed $LABEL — runs at $(printf '%02d:%02d' 0 "$SCHEDULE_MINUTE") past hour(s): $SCHEDULE_HOURS."
 }
 
 do_uninstall() {

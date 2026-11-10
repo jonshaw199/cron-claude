@@ -2,8 +2,10 @@
 # A job is just these variables — the scaffold does the rest.
 
 JOB_NAME="example"                 # defaults to the filename
-SCHEDULE_HOUR=9                    # 24h local time
+SCHEDULE_HOUR=9                    # 24h local time (once a day)
 SCHEDULE_MINUTE=0
+# Run several times a day instead: space-separated hours (overrides SCHEDULE_HOUR).
+# SCHEDULE_HOURS="9 13 17"
 
 # The task. Use PROMPT for a short inline task, or PROMPT_FILE for a longer one.
 PROMPT="Summarize what changed in the git repo at the working dir over the last day.

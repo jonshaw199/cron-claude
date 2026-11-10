@@ -10,10 +10,7 @@
     <string>@BIN@ run @JOB@</string>
   </array>
   <key>StartCalendarInterval</key>
-  <dict>
-    <key>Hour</key><integer>@HOUR@</integer>
-    <key>Minute</key><integer>@MINUTE@</integer>
-  </dict>
+@CALENDAR@
   <key>StandardOutPath</key><string>@LOG@</string>
   <key>StandardErrorPath</key><string>@LOG@</string>
   <key>RunAtLoad</key><false/>
