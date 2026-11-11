@@ -48,6 +48,8 @@ load_job() { # path — sources the job and applies defaults
   # SCHEDULE_HOURS (space-separated) runs the job several times a day; it overrides
   # SCHEDULE_HOUR when set. e.g. SCHEDULE_HOURS="9 13 17", or "0..23" style lists.
   : "${SCHEDULE_HOURS:=$SCHEDULE_HOUR}"
+  # SCHEDULE, a 5-field cron expression ("min hour dom mon dow"), overrides both.
+  : "${SCHEDULE:=}"
   : "${ALLOWED_TOOLS:=Read Grep Glob}"   # read-only by default; jobs opt into writes
   : "${WORKING_DIR:=$HOME}"
   : "${NOTIFY:=1}"
@@ -114,20 +116,71 @@ This is a DRY RUN — make no irreversible changes; report only what you WOULD d
   notify "cron-claude: $JOB_NAME" "$outcome"
 }
 
+# Expand one cron field ("*", "a", "a,b", "a-b", "*/n", "a-b/n") into discrete values
+# within [lo,hi]. Prints nothing for "*" (the caller omits that launchd key).
+expand_cron_field() { # field lo hi
+  local f="$1" lo="$2" hi="$3" part base step a b v out=""
+  [ "$f" = "*" ] && return 0
+  local IFS=','; set -- $f; unset IFS
+  for part in "$@"; do
+    step=1; case "$part" in */*) base="${part%/*}"; step="${part#*/}";; *) base="$part";; esac
+    if [ "$base" = "*" ]; then a="$lo"; b="$hi"
+    elif [ "${base%-*}" != "$base" ]; then a="${base%-*}"; b="${base#*-}"
+    else a="$base"; b="$base"; fi
+    for ((v=a; v<=b; v+=step)); do out="$out $v"; done
+  done
+  printf '%s\n' "$out" | tr ' ' '\n' | grep -v '^$' | sort -nu | tr '\n' ' '
+}
+
+# Translate a 5-field cron expression into a launchd StartCalendarInterval array:
+# one <dict> per combination of specified fields. Caps the expansion to stay sane.
+cron_to_calendar() { # "min hour dom mon dow"
+  local cmin chour cdom cmon cdow; read -r cmin chour cdom cmon cdow <<< "$1"
+  local MINS HOURS DOMS MONS DOWS
+  MINS="$(expand_cron_field "$cmin" 0 59)"; [ -z "$MINS" ] && MINS="*"
+  HOURS="$(expand_cron_field "$chour" 0 23)"; [ -z "$HOURS" ] && HOURS="*"
+  DOMS="$(expand_cron_field "$cdom" 1 31)"; [ -z "$DOMS" ] && DOMS="*"
+  MONS="$(expand_cron_field "$cmon" 1 12)"; [ -z "$MONS" ] && MONS="*"
+  DOWS="$(expand_cron_field "$cdow" 0 7)"; [ -z "$DOWS" ] && DOWS="*"
+  local mi ho dm mo dw d dicts="" n=0 had_f=0
+  case $- in *f*) had_f=1;; esac
+  set -f   # the "*" sentinel must not be glob-expanded by the unquoted loops
+  for mi in $MINS; do for ho in $HOURS; do for dm in $DOMS; do for mo in $MONS; do for dw in $DOWS; do
+    d="    <dict>"
+    [ "$mi" != "*" ] && d="$d<key>Minute</key><integer>$mi</integer>"
+    [ "$ho" != "*" ] && d="$d<key>Hour</key><integer>$ho</integer>"
+    [ "$dm" != "*" ] && d="$d<key>Day</key><integer>$dm</integer>"
+    [ "$mo" != "*" ] && d="$d<key>Month</key><integer>$mo</integer>"
+    [ "$dw" != "*" ] && d="$d<key>Weekday</key><integer>$dw</integer>"
+    d="$d</dict>"
+    dicts="$dicts
+$d"; n=$((n+1))
+    if [ "$n" -gt 500 ]; then [ "$had_f" = 0 ] && set +f
+      echo "cron-claude: schedule expands to >500 entries; use SCHEDULE_HOURS or a coarser cron" >&2; return 1; fi
+  done; done; done; done; done
+  [ "$had_f" = 0 ] && set +f
+  printf '  <array>%s\n  </array>\n' "$dicts"
+}
+
 do_install() {
   load_job "$1"
   mkdir -p "$(dirname "$PLIST")" "$JOB_STATE"
-  # Build the StartCalendarInterval value: one <dict> per hour in SCHEDULE_HOURS.
+  # Build the StartCalendarInterval value. A cron expression (SCHEDULE) wins; otherwise
+  # one <dict> per hour in SCHEDULE_HOURS.
   local cal
-  set -- $SCHEDULE_HOURS
-  if [ "$#" -gt 1 ]; then
-    cal="  <array>"
-    for h in "$@"; do cal="$cal
-    <dict><key>Hour</key><integer>$h</integer><key>Minute</key><integer>$SCHEDULE_MINUTE</integer></dict>"; done
-    cal="$cal
-  </array>"
+  if [ -n "$SCHEDULE" ]; then
+    cal="$(cron_to_calendar "$SCHEDULE")" || return 1
   else
-    cal="  <dict><key>Hour</key><integer>$1</integer><key>Minute</key><integer>$SCHEDULE_MINUTE</integer></dict>"
+    set -- $SCHEDULE_HOURS
+    if [ "$#" -gt 1 ]; then
+      cal="  <array>"
+      for h in "$@"; do cal="$cal
+    <dict><key>Hour</key><integer>$h</integer><key>Minute</key><integer>$SCHEDULE_MINUTE</integer></dict>"; done
+      cal="$cal
+  </array>"
+    else
+      cal="  <dict><key>Hour</key><integer>$1</integer><key>Minute</key><integer>$SCHEDULE_MINUTE</integer></dict>"
+    fi
   fi
   # Substitute the scalar placeholders, then inject the (possibly multi-line) calendar
   # block where @CALENDAR@ sits — a plain read loop handles the newlines cleanly.
@@ -138,7 +191,7 @@ do_install() {
     done > "$PLIST"
   launchctl unload "$PLIST" 2>/dev/null || true
   launchctl load -w "$PLIST"
-  echo "Installed $LABEL — runs at $(printf '%02d:%02d' 0 "$SCHEDULE_MINUTE") past hour(s): $SCHEDULE_HOURS."
+  echo "Installed $LABEL — schedule: ${SCHEDULE:-hours ($SCHEDULE_HOURS) at :$SCHEDULE_MINUTE}."
 }
 
 do_uninstall() {

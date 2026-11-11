@@ -6,6 +6,9 @@ SCHEDULE_HOUR=9                    # 24h local time (once a day)
 SCHEDULE_MINUTE=0
 # Run several times a day instead: space-separated hours (overrides SCHEDULE_HOUR).
 # SCHEDULE_HOURS="9 13 17"
+# Or a standard 5-field cron expression (overrides both) — supports lists, ranges,
+# and steps (launchd has no step syntax, so steps are expanded):
+# SCHEDULE="30 8 * * 1-5"   # 08:30 on weekdays
 
 # The task. Use PROMPT for a short inline task, or PROMPT_FILE for a longer one.
 PROMPT="Summarize what changed in the git repo at the working dir over the last day.

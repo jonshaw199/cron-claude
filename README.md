@@ -32,7 +32,8 @@ bin/cron-claude uninstall digest
 
 ```sh
 JOB_NAME="digest"
-SCHEDULE_HOUR=8; SCHEDULE_MINUTE=30   # or SCHEDULE_HOURS="8 13 17" for several times a day
+SCHEDULE_HOUR=8; SCHEDULE_MINUTE=30   # or SCHEDULE_HOURS="8 13 17" (several times a day)
+# SCHEDULE="30 8 * * 1-5"             # or a standard 5-field cron expression
 PROMPT="Summarize yesterday's commits in the working dir. Make no edits."
 WORKING_DIR="$HOME/code/myproject"
 ADD_DIRS=("$HOME/notes")
